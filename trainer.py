@@ -43,7 +43,7 @@ class Trainer:
         # get random indices
         train_indices = np.random.permutation(len(self.train_dataset))
         for train_idx in tqdm(train_indices, total=len(train_indices)):
-            train_sample = train_sample[train_idx]
+            train_sample = self.train_dataset[train_idx]
             # get data from sample
             lr_patches = train_sample['lr_patches']
             hr_patches = train_sample['hr_patches']
@@ -116,7 +116,7 @@ class Trainer:
             train_history['policies'].append(get_mean(policies))
 
         return train_history
-        
+
 
     def configure_optimizers(self, optimizer, scheduler):
         self.optimizer = optimizer
