@@ -2,9 +2,9 @@ NUM_CLASSES = 80
 MMDET_DIR = '/trinity/home/d.kuznedelev/.conda/envs/mmlab/lib/python3.7/site-packages/mmdet'
 DATA_DIR = '/trinity/home/d.kuznedelev/Datasets/COCO'
 
-NUM_GPU = 2
+NUM_GPU = 1
 NUM_WORKERS = 1
-SAMPLES_PER_GPU = 64
+SAMPLES_PER_GPU = 128
 
 _base_ = f'{MMDET_DIR}/configs/yolox/yolox_tiny_8x8_300e_coco.py'
 
@@ -13,7 +13,7 @@ dataset_type = 'CocoDataset'
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 
-img_scale = (320, 320)
+img_scale = (160, 160)
 
 
 train_pipeline = [
@@ -78,7 +78,7 @@ val_dataset = dict(
 
 data = dict(
     _delete_=True,
-    samples_per_gpu=32,
+    samples_per_gpu=SAMPLES_PER_GPU,
     workers_per_gpu=NUM_WORKERS,
     train=train_dataset,
     val=val_dataset
@@ -105,15 +105,24 @@ custom_hooks = [
 ]
 
 optimizer = dict(
-    type='SGD',
-    lr=0.01 * NUM_GPU * SAMPLES_PER_GPU / 64,
-    momentum=0.9,
-    weight_decay=5e-4,
-    nesterov=True,
-    paramwise_cfg=dict(norm_decay_mult=0., bias_decay_mult=0.))
-optimizer_config = dict(grad_clip=None)
+    _delete_=True,
+    type='Adam', 
+    lr=0.003 * NUM_GPU * SAMPLES_PER_GPU / 64, 
+    weight_decay=0.00001
+)
+
+# learning policy
+lr_config = dict(
+    _delete_=True,
+    policy='cyclic',
+    target_ratio=(10, 1e-4),
+    cyclic_times=1,
+    step_ratio_up=0.4,
+)
 
 # runtime settings
-runner = dict(type='EpochBasedRunner', max_epochs=300)
+runner = dict(type='EpochBasedRunner', max_epochs=50)
 checkpoint_config = dict(interval=interval)
 evaluation = dict(interval=interval, metric='bbox')
+
+load_from = "work_dirs/yolox_tiny_160_coco/latest.pth"
