@@ -110,7 +110,7 @@ class Trainer:
         # get random indices
         val_indices = np.random.permutation(len(self.val_dataset))
         for val_idx in tqdm(val_indices, total=len(val_indices)):
-            val_sample = val_sample[val_idx]
+            val_sample = self.val_dataset[val_idx]
             # get data from sample
             lr_patches = val_sample['lr_patches']
             hr_patches = val_sample['hr_patches']
