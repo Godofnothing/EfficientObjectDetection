@@ -10,6 +10,7 @@ from mmdet.apis import inference_detector
 
 from utils import DetectionReward, convert_predictions
 from visualization import DetectionVisualizer
+from torch.utils.data import DataLoader
 
 
 def get_mean(x : list):
@@ -101,7 +102,6 @@ class Trainer:
 
         return rewards_stoch, rewards_baseline, policies
 
-    
     def val_epoch(self):
          # set model to eval mode
         self.agent.eval()
@@ -224,3 +224,161 @@ class Trainer:
         dt_bboxes, dt_labels = convert_predictions(dt_results)
         # draw predictions
         self.visualizer.draw_patches_with_bboxes(chosen_patches, dt_bboxes, dt_labels, output_path)        
+
+class TrainerSP:
+
+    def __init__(
+        self,
+        agent,
+        train_dataset,
+        detection_reward : DetectionReward,
+        val_dataset = None,
+        alpha = 0.8,
+        device = 'cuda'):
+        '''
+        :Arguments:
+        - agent: torch.nn.Module : agent to be trained
+        - train_dataset : PolicyDataset
+        - detection_reward : revard class
+        - val_dataset : PolicyDataset
+        - alpha : float : probability bounding factor (see original implementation)
+        '''
+
+        self.agent = agent
+        self.train_dataset = train_dataset
+        self.val_dataset = val_dataset
+        self.detection_reward = detection_reward 
+        self.device = device
+        
+        self.optimizer = None
+        self.scheduler=None
+        self.alpha = alpha
+    
+    def configure_optimizer(self, optimizer):
+        self.optimizer = optimizer
+    
+    def configure_scheduler(self, scheduler):
+        self.scheduler = scheduler
+
+    def train_epoch(self, epoch, trainloader):
+        assert self.optimizer is not None
+        # set model to train mode
+        self.agent.train()
+        rewards_stoch, rewards_baseline, policies = [], [], []
+        for batch_idx, (inputs, targets) in tqdm(enumerate(trainloader), total=len(trainloader)):
+            batch_size = inputs.size(0)
+            # inputs are batch of images 
+            # targets are metrics by detectors
+            inputs = inputs.to(self.device)
+            targets = targets.to(self.device)
+            assert targets.size(1) == 2
+
+            # Actions by the Agent
+            probs = F.sigmoid(self.agent(inputs)).view(-1)
+            # it is sort of exploration
+            alpha_hp = np.clip(self.alpha + epoch * 0.001, 0.6, 0.95)
+            probs = probs*alpha_hp + (1-alpha_hp) * (1-probs)
+
+            # Sample the policies from the Bernoulli distribution characterized by agent
+            distr = Bernoulli(probs)
+            policy_sample = distr.sample()
+
+            # Test time policy - used as baseline policy in the training step
+            policy_map = torch.zeros_like(probs)
+            policy_map[probs >= 0.5] = 1.0
+            # print(policy_map.shape)
+            # print(probs.shape)
+
+            # compute the reward for the baseline and stoch models
+            reward_baseline = self.detection_reward.compute_reward(targets[:, 0], targets[:, 1], policy_map)
+            assert len(reward_baseline.shape) == 1
+            assert reward_baseline.size(0) == batch_size
+
+            reward_stoch = self.detection_reward.compute_reward(targets[:, 0], targets[:, 1], policy_sample)
+            assert reward_baseline.shape == reward_stoch.shape
+
+            advantage = reward_stoch - reward_baseline
+            assert advantage.shape == policy_sample.shape
+
+            # find the loss for the agent
+            loss = - distr.log_prob(policy_sample)
+            loss = loss * advantage
+            loss = loss.mean()
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+
+            rewards_stoch.extend(reward_stoch.detach().cpu().tolist())
+            rewards_baseline.extend(reward_baseline.detach().cpu().tolist())
+            policies.extend(policy_sample.detach().cpu().tolist())
+
+        return rewards_stoch, rewards_baseline, policies
+
+    def val_epoch(epoch, valloader, _type='naive'):
+        assert _type in ['naive', 'stoch']
+        self.agent.eval()
+        rewards, policies = [], []
+
+        for batch_idx, (inputs, targets) in tqdm(enumerate(valloader), total=len(valloader)):
+            inputs = inputs.to(self.device)
+            targets = targets.to(self.device)
+            
+            # Actions by the Policy Network
+            probs = F.sigmoid(self.agent(inputs)).view(-1)
+
+            if _type == 'stoch':
+                distr = Bernoulli(probs)
+                policy = distr.sample()
+            else:
+                policy = torch.zeros_like(probs)
+                policy[probs >= 0.5] = 1.0
+
+            offset_fd, offset_cd = utils.read_offsets(targets, num_actions)
+            reward = self.detection_reward.compute_reward(targets[:, 0], targets[:, 1], policy)
+
+            rewards.extend(reward.detach().cpu().tolist())
+            policies.extend(policy.detach().cpu().tolist())
+        return rewards, policies
+
+    def train(self, num_epochs, validate=False, batch_size=64, policy_type='naive', verbose=True):
+        train_history = dict(
+            rewards_stoch=[],
+            rewards_baseline=[],
+            policies=[]
+        )
+
+        if validate:
+            val_history = dict(
+                rewards=[],
+                policies=[]
+            )
+
+        for i_epoch in range(num_epochs):
+            trainloader = DataLoader(
+                    self.train_dataset, batch_size=batch_size, shuffle=True)
+            rewards_stoch, rewards_baseline, policies = self.train_epoch(i_epoch, trainloader)
+            if self.scheduler:
+                self.scheduler.step()
+            # update train history
+            train_history['rewards_stoch'].append(get_mean(rewards_stoch))
+            train_history['rewards_baseline'].append(get_mean(rewards_baseline))
+            train_history['policies'].append(get_mean(policies))
+            if verbose:
+                print('Train: %d | RS: %.3f | RB: %.3f' % (
+                    i_epoch, get_mean(rewards_stoch), get_mean(rewards_baseline)))
+
+            if validate:
+                valloader = DataLoader(self.val_dataset, batch_ize=batch_size, shuffle=False)
+                rewards, policies = self.val_epoch(i_epoch)
+                # update val history
+                val_history['rewards'].append(get_mean(rewards))
+                val_history['policies'].append(get_mean(policies))
+                if verbose:
+                    print('Train: %d | R: %.3f' % (
+                        i_epoch, get_mean(rewards)))
+
+        if validate:
+            return train_history, val_history
+        else:
+            return train_history

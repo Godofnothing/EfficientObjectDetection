@@ -1,3 +1,4 @@
+import torch
 
 class DetectionReward:
 
@@ -13,9 +14,9 @@ class DetectionReward:
         
     def compute_reward(
         self, 
-        wk_detection_metric : float,
-        sg_detection_metric : float,
-        action : int
+        wk_detection_metric ,
+        sg_detection_metric ,
+        action
     ):
         '''
         Args:
