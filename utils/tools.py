@@ -2,33 +2,127 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
+def compute_s2(cum, cum2, n, unbiased=True):
+        s2 = 0.
+        n = float(n)
+        if unbiased:
+            if n > 1:
+                s2 = cum2 / (n - 1.) - (cum**2) / (n * (n - 1.))
+        else:
+            s2 = cum2 / n - (cum/n) ** 2
+        return s2
+
 class StatManagerBase:
-    
+
     @staticmethod
     def _batch_mean(inst, value):
         inst.curr_epoch_history.append(value.mean().item())
-    
+
     @staticmethod
     def _batch_extend(inst, value):
         inst.curr_epoch_history.extend(value.detach().cpu().tolist())
-    
+
     @staticmethod
     def _batch_std(inst, value):
         inst.curr_epoch_history.append(value.std().item())
+
+    @staticmethod
+    def _epoch_stat_update(mode):
+        assert mode in ['mean', 'std']
+
+        def epoch_stat_update_func(inst, value):
+            if not hasattr(inst, '_curr_epoch_n'):
+                inst._curr_epoch_n = 0
+                inst._curr_epoch_cum = 0.
+                if mode == 'std':
+                    inst._curr_epoch_cum2 = 0.
+            assert len(value.shape) < 2
+            if len(value.shape) == 0:
+                len_value = 1
+            else:
+                len_value = value.size(0)
+            inst._curr_epoch_cum += value.sum().item()
+            inst._curr_epoch_n += len_value
+            if mode == 'std':
+                inst._curr_epoch_cum2 += (value**2).sum().item()
+
+        return epoch_stat_update_func
+
+    @staticmethod
+    def _epoch_stat_new_epoch(mode):
+        assert mode in ['mean', 'std']
+
+        def epoch_stat_new_epoch_func(inst):
+            if not hasattr(inst, '_curr_epoch_n'):
+                inst._curr_epoch_n = 0
+                inst._curr_epoch_cum = 0.
+                if mode == 'std':
+                    inst._curr_epoch_cum2 = 0.
+            if inst._curr_epoch_n == 0:
+                raise Exception(f"No updates during the epoch, statistic '{inst.name}.{mode}'!")
+            if mode == 'mean':
+                inst.curr_epoch_history = [
+                    inst._curr_epoch_cum/float(inst._curr_epoch_n), ]
+            if mode == 'std':
+                inst.curr_epoch_history = [
+                    np.sqrt(compute_s2(
+                        inst._curr_epoch_cum,
+                        inst._curr_epoch_cum2,
+                        inst._curr_epoch_n)), ]
+            inst._curr_epoch_n = 0
+            inst._curr_epoch_cum = 0.
+            if mode == 'std':
+                inst._curr_epoch_cum2 = 0.
+
+        return epoch_stat_new_epoch_func
+    
+    @staticmethod
+    def _epoch_stat_draw_start(mode):
+        assert mode in ['mean', 'std']
+        
+        def epoch_stat_draw_func(inst):
+            if not hasattr(inst, '_curr_epoch_n'):
+                inst._curr_epoch_n = 0
+                inst._curr_epoch_cum = 0.
+                if mode == 'std':
+                    inst._curr_epoch_cum2 = 0.
+            if inst._curr_epoch_n == 0:
+                return None
+            if mode == 'mean':
+                inst.curr_epoch_history = [
+                    inst._curr_epoch_cum/float(inst._curr_epoch_n), ]
+            if mode == 'std':
+                inst.curr_epoch_history = [
+                    np.sqrt(compute_s2(
+                        inst._curr_epoch_cum,
+                        inst._curr_epoch_cum2,
+                        inst._curr_epoch_n)), ]
+
+        return epoch_stat_draw_func
+
 
 class StatManager(StatManagerBase):
 
     reduction_funcs = {
         'batch_mean': StatManagerBase._batch_mean,
         'batch_extend': StatManagerBase._batch_extend,
-        'batch_std': StatManagerBase._batch_std
+        'batch_std': StatManagerBase._batch_std,
+        'epoch_mean': {
+            'update': StatManagerBase._epoch_stat_update('mean'),
+            'new_epoch': StatManagerBase._epoch_stat_new_epoch('mean'),
+            'draw_start': StatManagerBase._epoch_stat_draw_start('mean')},
+        'epoch_std': {
+            'update': StatManagerBase._epoch_stat_update('std'),
+            'new_epoch': StatManagerBase._epoch_stat_new_epoch('std'),
+            'draw_start': StatManagerBase._epoch_stat_draw_start('std')}
     }
-    
+
     def do_reduction(self, command):
-        assert command in ['update', 'new_epoch']
-        
+        assert command in [
+            'update', 'new_epoch', 'draw_start', 'draw_finish']
+        functions = self.reduction_funcs[self.reduction]
+
         def on_update(value):
-            functions = self.reduction_funcs[self.reduction]
             if isinstance(functions, dict):
                 func = functions['update']
             else:
@@ -36,20 +130,36 @@ class StatManager(StatManagerBase):
             if not isinstance(value, torch.Tensor):
                 value = torch.tensor(value)
             func(self, value)
-        
+
         def on_new_epoch():
-            functions = self.reduction_funcs[self.reduction]
             if isinstance(functions, dict):
-                functions['new_epoch'](self)
-        
+                if 'new_epoch' in functions.keys():
+                    functions['new_epoch'](self)
+
+        def on_draw_start():
+            if isinstance(functions, dict):
+                if 'draw_start' in functions.keys():
+                    functions['draw_start'](self)
+
+        def on_draw_finish():
+            if isinstance(functions, dict):
+                if 'draw_finish' in functions.keys():
+                    functions['draw_finish'](self)
+
         if command == 'update':
             return on_update
-        return on_new_epoch
-    
+        if command == 'new_epoch':
+            return on_new_epoch
+        if command == 'draw_start':
+            return on_draw_start
+        if command == 'draw_finish':
+            return on_draw_finish
+        raise Exception('something has gone wrong')
+
     def batch_extend_reduction(self, value):
         self.curr_epoch_history.extend(value.detach().cpu().tolist())
-    
-    def __init__(self, name, reduction='batch_mean'):
+
+    def __init__(self, name, reduction='batch_mean', draw_only_last_epoch=True):
         '''
         This class helps to collect statistics during the training
         '''
@@ -59,12 +169,13 @@ class StatManager(StatManagerBase):
         assert reduction in self.reduction_funcs.keys()
         self.reduction = reduction
         self.curr_epoch = 0
-    
+        self.draw_last_epoch = draw_only_last_epoch
+
     def reset(self):
         self.history = []
         self.curr_epoch_history = []
         self.curr_epoch = 0
-    
+
     def add(self, value):
         self.do_reduction('update')(value)
 
@@ -73,7 +184,7 @@ class StatManager(StatManagerBase):
         self.do_reduction('new_epoch')()
         self.history.append(self.curr_epoch_history)
         self.curr_epoch_history = []
-    
+
     def get_linearized_history(self, only_last_epoch=False):
         lin_history = []
         if not only_last_epoch:
@@ -81,10 +192,11 @@ class StatManager(StatManagerBase):
         lin_history.extend(self.curr_epoch_history)
         return lin_history
 
-    def draw(self, ax, draw_last_epoch_policy='standard', only_last_epoch=True):
+    def draw(self, ax, draw_last_epoch_policy='standard'):
         assert draw_last_epoch_policy in ['standard', 'adaptive']
+        self.do_reduction('draw_start')()
         lh = len(self.history)
-        if lh > 0 and not only_last_epoch:
+        if lh > 0 and not self.draw_last_epoch:
             xs = np.concatenate([
                 np.linspace(i, i + 1, len(self.history[i]), endpoint=False) \
                 for i in range(lh)])
@@ -94,7 +206,7 @@ class StatManager(StatManagerBase):
             if draw_last_epoch_policy == 'standard':
                 end_ls = lh + 1
             else:
-                if lh > 0 and not only_last_epoch:
+                if lh > 0 and not self.draw_last_epoch:
                     mean_len_histories = int(np.mean([len(hist) for hist in self.history]))
                 else:
                     mean_len_histories = len(self.curr_epoch_history)
@@ -104,27 +216,32 @@ class StatManager(StatManagerBase):
                     lh, end_ls, len(self.curr_epoch_history), endpoint=False)])
         if len(xs) > 0:
             linearized_history = self.get_linearized_history(
-                only_last_epoch=only_last_epoch)
-            ax.plot(xs, linearized_history, label=self.name)
+                only_last_epoch=self.draw_last_epoch)
+            assert len(xs) == len(linearized_history)
+            if len(xs) > 1:
+                ax.plot(xs, linearized_history, label=self.name)
+            else:
+                ax.scatter(xs, linearized_history, label=self.name)
+        self.do_reduction('draw_finish')()
 
 class StatsSuiteManager:
-    
+
     def __init__(self):
         '''
         This class stores and draws several statistics
         '''
         self.stats_managers = {}
         self.set_naxes = set()
-    
+
     def register(self, stat_manager:StatManager, n_ax):
         assert isinstance(stat_manager, StatManager)
         assert isinstance(n_ax, int)
         self.stats_managers[stat_manager.name] = [stat_manager, n_ax]
         self.set_naxes.add(n_ax)
-    
+
     def add(self, name, value):
         self.stats_managers[name][0].add(value)
-    
+
     def epoch(self, *names):
         if len(names) == 0:
             for value in self.stats_managers.values():
@@ -132,7 +249,7 @@ class StatsSuiteManager:
             return
         for name in names:
             self.stats_managers[name][0].epoch()
-    
+
     def draw(self, *args, ncols=1, figsize=(10, 10)):
         for n_ax in args:
             assert isinstance(n_ax, int)

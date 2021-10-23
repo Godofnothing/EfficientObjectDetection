@@ -312,14 +312,15 @@ class TrainerSP:
             self.optimizer.step()
             ssm.add('train_RW_stoch', reward_stoch)
             ssm.add('train_RW_base', reward_baseline)
-            ssm.add('train_policies', policy_sample)
+            ssm.add('train_policies_mean', policy_sample)
+            ssm.add('train_policies_std', policy_sample)
             ssm.add('loss', loss)
             if self.verbose:
                 if batch_idx % self.verbose == 0:
                     clear_output(wait=True)
-                    ssm.draw(0, 4, figsize=(10, 10))
+                    ssm.draw(0, 1, 2, 3, 4, ncols=2, figsize=(15, 10))
 
-    def val_epoch(epoch, valloader, _type='naive'):
+    def val_epoch(self, epoch, valloader, ssm, _type='naive'):
         assert _type in ['naive', 'stoch']
         self.agent.eval()
         rewards, policies = [], []
@@ -338,12 +339,15 @@ class TrainerSP:
                 policy = torch.zeros_like(probs)
                 policy[probs >= 0.5] = 1.0
 
-            offset_fd, offset_cd = utils.read_offsets(targets, num_actions)
             reward = self.detection_reward.compute_reward(targets[:, 0], targets[:, 1], policy)
 
-            rewards.extend(reward.detach().cpu().tolist())
-            policies.extend(policy.detach().cpu().tolist())
-        return rewards, policies
+            ssm.add('val_RW', reward)
+            ssm.add('val_RW_mean', reward)
+            ssm.add('val_policies_mean', policy)
+            ssm.add('val_policies_std', policy)
+        clear_output(wait=True)
+        ssm.draw(0, 1, 2, 3, 4, ncols=2, figsize=(15, 10))
+
 
     def train(
         self, 
@@ -358,13 +362,22 @@ class TrainerSP:
         ssm.register(StatManager('train_RW_stoch'), 0)
         ssm.register(StatManager('train_RW_base'), 0)
         ssm.register(StatManager('loss'), 4)
-        ssm.register(StatManager('train_policies', 'batch_extend'), 1)
+        ssm.register(StatManager('train_policies_mean'), 1)
+        ssm.register(StatManager('train_policies_std', 'batch_std'), 1)
 
         if validate:
             ssm.register(StatManager('val_RW'), 2)
-            ssm.register(StatManager('val_policies', 'batch_extend'), 3)
+            ssm.register(StatManager('val_RW_mean', 'epoch_mean', False), 2)
+            ssm.register(StatManager('val_policies_mean', 'epoch_mean', False), 3)
+            ssm.register(StatManager('val_policies_std', 'epoch_std', False), 3)
 
         for i_epoch in range(num_epochs):
+            if validate and i_epoch == 0:
+                valloader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False)
+                self.val_epoch(i_epoch, valloader, ssm, _type=val_policy_type)
+                # update val history
+                ssm.epoch()
+
             trainloader = DataLoader(
                     self.train_dataset, batch_size=batch_size, shuffle=True)
             self.train_epoch(i_epoch, trainloader, ssm)
@@ -372,14 +385,9 @@ class TrainerSP:
                 self.scheduler.step()
 
             if validate:
-                valloader = DataLoader(self.val_dataset, batch_ize=batch_size, shuffle=False)
-                rewards, policies = self.val_epoch(i_epoch, _type=val_policy_type)
+                valloader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False)
+                self.val_epoch(i_epoch, valloader, ssm, _type=val_policy_type)
                 # update val history
-                val_history['rewards'].append(get_mean(rewards))
-                val_history['policies'].append(get_mean(policies))
-                if verbose:
-                    print('Train: %d | R: %.3f' % (
-                        i_epoch, get_mean(rewards)))
             ssm.epoch()
 
         return ssm
