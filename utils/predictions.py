@@ -3,19 +3,20 @@ import numpy as np
 from typing import List
 
 
-def convert_predictions(per_class_predictions: List[List[np.ndarray]]):
-    # create list of bboxes and labels for each patch
-    patches_bboxes = [[np.zeros((0, 4))] for _ in per_class_predictions]
-    patches_labels = [[] for _ in per_class_predictions]
+def convert_predictions(per_class_predictions: List[np.ndarray], conf_thr=0.5):
+    # create list of bboxes and labels 
+    bboxes = [np.zeros((0, 4)) for _ in per_class_predictions]
+    labels = []
 
-    for i, image_pcp in enumerate(per_class_predictions):
-        for class_idx, class_predictions in enumerate(image_pcp):
-            if len(class_predictions) > 0:
-                patches_bboxes[i].append(class_predictions[:, :4])
-                patches_labels[i].append(class_idx)
+    for class_idx, class_predictions in enumerate(per_class_predictions):
+        if len(class_predictions) > 0:
+            conf_mask = class_predictions[:, 4] > conf_thr
+            if conf_mask.sum() > 0:
+                bboxes.append(class_predictions[conf_mask, :4])
+                labels.extend([class_idx for _ in range(conf_mask.sum())])
 
-        patches_bboxes[i] = np.concatenate(patches_bboxes[i], axis=0)
-        patches_labels[i] = np.array(patches_labels[i], dtype=np.int8)
+    bboxes = np.concatenate(bboxes, axis=0)
+    labels = np.array(labels, dtype=np.int8)
 
-    return patches_bboxes, patches_labels
+    return bboxes, labels
         

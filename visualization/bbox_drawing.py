@@ -20,39 +20,41 @@ class DetectionVisualizer:
         self.figsize = figsize
 
         self.id_to_cont_id = id_to_cont_id if id_to_cont_id else {i : i for i in range(num_classes)}
+        self.cont_id_to_id = {cont_id : id for id, cont_id in id_to_cont_id.items()}
         self.id_to_class = id_to_class if id_to_class else self.id_to_cont_id
 
         self.colors = [(np.random.rand(), np.random.rand(), np.random.rand()) for _ in range(self.num_classes)]        
 
     def draw_patches_with_bboxes(
         self, 
-        patches, 
-        patches_bboxes, 
+        image, 
+        bboxes, 
         labels, 
+        map_to_cond_id=False,
         output=''
     ):
-        num_splits = int(np.sqrt(len(patches)))
-        fig, ax = plt.subplots(nrows=num_splits, ncols=num_splits, figsize=self.figsize)
+        fig, ax = plt.subplots(figsize=self.figsize)
+                                              
+        ax.imshow(image[..., ::-1])
+        ax.axis('off');
 
-        for idx, (lr_patch, lr_patch_bboxes, patch_labels) in enumerate(zip(patches, patches_bboxes, labels)):
-            i, j = idx // num_splits, idx % num_splits                                         
-            ax[i, j].imshow(lr_patch[..., ::-1])
-            ax[i, j].axis('off');
-            
-            for bbox, label in zip(lr_patch_bboxes, patch_labels):
+        for bbox, label in zip(bboxes, labels):
+            if map_to_cond_id:
                 cont_label = self.id_to_cont_id[label]
-                x1, y1, x2, y2 = bbox
-                w, h = x2 - x1, y2 - y1
-                bbox_rect = Rectangle((x1, y1), w, h, linewidth=2, edgecolor=self.colors[cont_label], facecolor='none')        
-                ax[i, j].add_patch(bbox_rect)
+            else:
+                cont_label = label
+                label = self.cont_id_to_id[cont_label]
                 
-                # add text
-                ax[i, j].text(
-                    x1, y1, self.id_to_class[label], 
-                    fontsize=16, fontfamily='serif', bbox=dict(facecolor=self.colors[cont_label])
-                )
+            x1, y1, x2, y2 = bbox
+            w, h = x2 - x1, y2 - y1
+            bbox_rect = Rectangle((x1, y1), w, h, linewidth=2, edgecolor=self.colors[cont_label], facecolor='none')        
+            ax.add_patch(bbox_rect)
 
-        plt.tight_layout()
+            # add text
+            ax.text(
+                x1, y1, self.id_to_class[label], 
+                fontsize=16, fontfamily='serif', bbox=dict(facecolor=self.colors[cont_label])
+            )
 
         if output:
             plt.savefig(output)
