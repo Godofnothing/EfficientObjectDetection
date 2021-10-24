@@ -1,6 +1,8 @@
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+from collections.abc import Iterable
+import pickle
 
 def compute_s2(cum, cum2, n, unbiased=True):
         s2 = 0.
@@ -100,6 +102,22 @@ class StatManagerBase:
 
         return epoch_stat_draw_func
 
+def stat_manager_todict(sm):
+    sm_dict = {
+        'name': sm.name,
+        'history': sm.history,
+        'epoch': sm.curr_epoch,
+        'reduction': sm.reduction}
+    return sm_dict
+
+def stat_manager_fromdict(sm_dict, draw_only_last_epoch=True):
+    sm = StatManager(
+        sm_dict['name'], 
+        reduction=sm_dict['reduction'],
+        draw_only_last_epoch=draw_only_last_epoch)
+    sm.history = sm_dict['history']
+    sm.curr_epoch = sm_dict['epoch']
+    return sm
 
 class StatManager(StatManagerBase):
 
@@ -223,6 +241,51 @@ class StatManager(StatManagerBase):
             else:
                 ax.scatter(xs, linearized_history, label=self.name)
         self.do_reduction('draw_finish')()
+
+def stats_suite_manager_todict(ssm):
+    ssm_dict = {key: stat_manager_todict(
+        value[0]) for key, value in ssm.stats_managers.items()}
+    return ssm_dict
+
+def stats_suite_manager_fromdict(ssm_dict, naxs=None, last_epoch_draw=True):
+    if naxs is None:
+        naxs = list(range(len(ssm_dict)))
+    assert isinstance(naxs, (list, dict))
+    if not len(naxs) == len(ssm_dict):
+        raise Exception(f"len of 'naxs' = {len(naxs)} must" + \
+                        " coinside with len of 'ssm_dict' = {len(ssm_dict)}")
+    if isinstance(last_epoch_draw, bool):
+        last_epoch_draw = [last_epoch_draw] * len(ssm_dict)
+    assert isinstance(last_epoch_draw, (list, dict))
+    if not len(last_epoch_draw) == len(ssm_dict):
+        raise Exception(f"len of 'last_epoch_draw' = {len(last_epoch_draw)} must" + \
+                        f" coinside with len of 'ssm_dict' = {len(ssm_dict)}")
+    ssm = StatsSuiteManager()
+    for i_stat, (stat, stat_dict) in enumerate(ssm_dict.items()):
+        if isinstance(naxs, list):
+            nax = naxs[i_stat]
+        elif isinstance(naxs, dict):
+            nax = naxs[stat]
+        if isinstance(last_epoch_draw, list):
+            led = last_epoch_draw[i_stat]
+        elif isinstane(last_epoch_draw, dict):
+            led = last_epoch_draw[stat]
+        ssm.register(stat_manager_fromdict(stat_dict, led), nax)
+    return ssm
+
+def stats_suite_manager_serialize(ssm, file_name):
+    ssm_dict = stats_suite_manager_todict(ssm)
+    with open(file_name, 'wb') as f:
+        pickle.dump(ssm_dict, f)
+
+def stats_suite_manager_deserialize(file_name, **kwargs):
+    '''
+    for kwargs reference see `stats_suite_manager_fromdict`
+    '''
+    with open(file_name, 'rb') as f:
+        ssm_dict = pickle.load(f)
+    ssm = stats_suite_manager_fromdict(ssm_dict, **kwargs)
+    return ssm
 
 class StatsSuiteManager:
 

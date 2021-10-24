@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 from utils.tools import StatManager, StatsSuiteManager 
 from IPython.display import clear_output
 from utils.metrics import DatasetMetricEvaluator
+from utils.tools import stats_suite_manager_serialize
 
 
 def get_mean(x : list):
@@ -365,6 +366,7 @@ class TrainerSP:
         validate=False, 
         batch_size=64, 
         val_policy_type='naive',
+        ssm_save_path = None,
         verbose=0):
 
         self.verbose=verbose
@@ -402,5 +404,7 @@ class TrainerSP:
                 self.val_epoch(i_epoch, valloader, ssm, _type=val_policy_type)
                 # update val history
             ssm.epoch()
+            if ssm_save_path is not None:
+                stats_suite_manager_serialize(ssm, ssm_save_path)
 
         return ssm
