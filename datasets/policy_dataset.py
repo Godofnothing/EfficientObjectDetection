@@ -34,6 +34,11 @@ class PolicyDataset(Dataset):
         assert len(self.wk_detection_summary) == len(self.sg_detection_summary)
         for i in range(len(self.wk_detection_summary)):
             assert self.wk_detection_summary.iloc[i, 0] == self.sg_detection_summary.iloc[i, 0]
+    
+    def check_valid_id(self, id):
+        if self.optimize_full_dataset:
+            return True
+        return id in self.allowed_image_ids_set
 
     def __init__(
         self, 
@@ -45,6 +50,7 @@ class PolicyDataset(Dataset):
         images_path = 'train', 
         subset_indices=None, 
         return_indices=False,
+        optimize_full_dataset=False,
         image_transform = transforms.Compose([
             transforms.ToPILImage(),
             transforms.Resize((448, 448)),
@@ -81,22 +87,26 @@ class PolicyDataset(Dataset):
         self.images_path = images_path
         self.image_transform = image_transform
         self.return_indices = return_indices
+        self.optimize_full_dataset = optimize_full_dataset # we suppose all provided ids are correct
 
         with open(f"{self.data_root}/{self.coco_annotations_path}") as anno_file:
             annotations = json.load(anno_file)
 
         self.image_ids = self._parse_image_ids(self.wk_detection_summary)
+        self.id2number = {}
         self.id2paths = {}
         self.id2wk_properties = {}
         self.id2sg_properties = {}
 
         # set of allowed ids
-        allowed_ids_set = set(self.image_ids)
+        self.allowed_image_ids_set = set(self.image_ids)
 
         # create mapping image_id to file_names
-        for image_data in annotations['images']:
-            if image_data['id'] in allowed_ids_set:
+        # and image_id to number in `images` array in annotations
+        for i_ann, image_data in enumerate(annotations['images']):
+            if self.check_valid_id(image_data['id']):
                 self.id2paths[image_data['id']] = image_data['file_name']
+                self.id2number[image_data['id']] = i_ann
 
         # create mapping image_id to properties
         for i in range(len(self.wk_detection_summary)):
@@ -108,6 +118,12 @@ class PolicyDataset(Dataset):
 
     def __len__(self):
         return len(self.image_ids)
+
+    def number_in_annotations(self, idx):
+        '''
+        return number in annotations['images'] of the image by idx
+        '''
+        return self.id2number[self.image_ids[idx]]
 
     def properties_transform(self, idx):
         image_id = self.image_ids[idx]

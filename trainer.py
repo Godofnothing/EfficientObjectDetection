@@ -13,6 +13,7 @@ from visualization import DetectionVisualizer
 from torch.utils.data import DataLoader
 from utils.tools import StatManager, StatsSuiteManager 
 from IPython.display import clear_output
+from utils.metrics import DatasetMetricEvaluator
 
 
 def get_mean(x : list):
@@ -234,6 +235,7 @@ class TrainerSP:
         agent,
         train_dataset,
         detection_reward : DetectionReward,
+        val_dataset_metric_evaluator : DatasetMetricEvaluator,
         val_dataset = None,
         alpha = 0.8,
         device = 'cuda'):
@@ -249,6 +251,8 @@ class TrainerSP:
         self.agent = agent
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
+        self.val_dataset.return_indices = True
+        self.val_dataset_metric_evaluator = val_dataset_metric_evaluator
         self.detection_reward = detection_reward 
         self.device = device
 
@@ -267,7 +271,6 @@ class TrainerSP:
         assert self.optimizer is not None
         # set model to train mode
         self.agent.train()
-        rewards_stoch, rewards_baseline, policies = [], [], []
         for batch_idx, (inputs, targets) in tqdm(enumerate(trainloader), total=len(trainloader)):
             batch_size = inputs.size(0)
             # inputs are batch of images 
@@ -314,18 +317,17 @@ class TrainerSP:
             ssm.add('train_RW_base', reward_baseline)
             ssm.add('train_policies_mean', policy_sample)
             ssm.add('train_policies_std', policy_sample)
-            ssm.add('loss', loss)
+            # ssm.add('loss', loss)
             if self.verbose:
                 if batch_idx % self.verbose == 0:
                     clear_output(wait=True)
-                    ssm.draw(0, 1, 2, 3, 4, ncols=2, figsize=(15, 10))
+                    ssm.draw(0, 1, 2, 3, 4, 5, ncols=2, figsize=(15, 10))
 
     def val_epoch(self, epoch, valloader, ssm, _type='naive'):
         assert _type in ['naive', 'stoch']
         self.agent.eval()
-        rewards, policies = [], []
-
-        for batch_idx, (inputs, targets) in tqdm(enumerate(valloader), total=len(valloader)):
+        self.val_dataset_metric_evaluator.reset()
+        for batch_idx, (inputs, targets, indices) in tqdm(enumerate(valloader), total=len(valloader)):
             inputs = inputs.to(self.device)
             targets = targets.to(self.device)
 
@@ -340,13 +342,21 @@ class TrainerSP:
                 policy[probs >= 0.5] = 1.0
 
             reward = self.detection_reward.compute_reward(targets[:, 0], targets[:, 1], policy)
+            self.val_dataset_metric_evaluator.update(policy, indices)
 
             ssm.add('val_RW', reward)
             ssm.add('val_RW_mean', reward)
-            ssm.add('val_policies_mean', policy)
-            ssm.add('val_policies_std', policy)
+            # ssm.add('val_policies_mean', policy)
+            # ssm.add('val_policies_std', policy)
+            ssm.add('val_sample_metric', self.detection_reward.compute_sample_metric(
+                targets[:, 0], targets[:, 1], policy))
+            ssm.add('val_flops', self.detection_reward.compute_sample_flops(policy))
+        dataset_metrics = self.val_dataset_metric_evaluator.evaluate('mAP')
+        self.val_dataset_metric_evaluator.reset()
+        ssm.add('val_dataset_mAP', dataset_metrics)
+        # ssm.add('val_dataset_recall', dataset_metrics['recall'])
         clear_output(wait=True)
-        ssm.draw(0, 1, 2, 3, 4, ncols=2, figsize=(15, 10))
+        ssm.draw(0, 1, 2, 3, 4, 5, ncols=2, figsize=(15, 10))
 
 
     def train(
@@ -361,15 +371,18 @@ class TrainerSP:
         ssm = StatsSuiteManager()
         ssm.register(StatManager('train_RW_stoch'), 0)
         ssm.register(StatManager('train_RW_base'), 0)
-        ssm.register(StatManager('loss'), 4)
         ssm.register(StatManager('train_policies_mean'), 1)
         ssm.register(StatManager('train_policies_std', 'batch_std'), 1)
 
         if validate:
             ssm.register(StatManager('val_RW'), 2)
             ssm.register(StatManager('val_RW_mean', 'epoch_mean', False), 2)
-            ssm.register(StatManager('val_policies_mean', 'epoch_mean', False), 3)
-            ssm.register(StatManager('val_policies_std', 'epoch_std', False), 3)
+            # ssm.register(StatManager('val_policies_mean', 'epoch_mean', False), 3)
+            # ssm.register(StatManager('val_policies_std', 'epoch_std', False), 3)
+            ssm.register(StatManager('val_dataset_mAP', 'epoch_mean', False), 5)
+            # ssm.register(StatManager('val_dataset_recall', 'epoch_mean', False), 5)
+            ssm.register(StatManager('val_sample_metric', 'epoch_mean', False), 4)
+            ssm.register(StatManager('val_flops', 'epoch_mean', False), 3)
 
         for i_epoch in range(num_epochs):
             if validate and i_epoch == 0:
