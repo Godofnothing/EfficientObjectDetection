@@ -391,7 +391,8 @@ class TrainerSP:
                 valloader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False)
                 self.val_epoch(i_epoch, valloader, ssm, _type=val_policy_type)
                 # update val history
-                ssm.epoch()
+                ssm.epoch(
+                    'val_RW', 'val_RW_mean', 'val_dataset_mAP', 'val_sample_metric', 'val_flops')
 
             trainloader = DataLoader(
                     self.train_dataset, batch_size=batch_size, shuffle=True)
