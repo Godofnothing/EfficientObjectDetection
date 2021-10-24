@@ -2,7 +2,7 @@
 
 Our code and experiments around the paper [https://arxiv.org/abs/1912.03966](https://arxiv.org/abs/1912.03966). We consider a simplified version of the framework presented in the paper. In particular, we train only one `policy network` which distinguish between images which need to be elaborated with a *large* and *accurate* detector and images which is sufficient to be processed with a *small* and *coarse* detector. In our experiments we deal with **COCO** image detection dataset and don't split images into patches. Our overall inference procedure is presented in the image
 
-<p align="center"><img src="images/RESULT.png" width="500" /></p>
+<p align="center"><img src="images/RESULT.png" width="700" /></p>
 
 ## Requirements
 
