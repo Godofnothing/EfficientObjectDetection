@@ -1,6 +1,8 @@
 import cv2
+import torch
 import numpy as np
 import torch.nn as nn
+import torch.nn.functional as F
 
 from torchvision import transforms
 from torch.distributions import Bernoulli
@@ -49,7 +51,8 @@ class Inference:
             raw_image = self.val_dataset.get_raw_image(idx)
             processed_image = self.val_dataset[idx]
         
-        probs = self.agent(processed_image.unsqueeze(0))
+        with torch.no_grad():
+            probs = F.sigmoid(self.agent(processed_image.unsqueeze(0))).view(-1)
         distr = Bernoulli(probs)
         action = distr.sample()
 
@@ -73,7 +76,8 @@ class Inference:
         raw_image = cv2.imread(path_to_image)
         processed_image = self.preproc_transforms(raw_image)
 
-        probs = self.agent(processed_image.unsqueeze(0))
+        with torch.no_grad():
+            probs = F.sigmoid(self.agent(processed_image.unsqueeze(0))).view(-1)
         distr = Bernoulli(probs)
         action = distr.sample()
 

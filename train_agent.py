@@ -94,4 +94,4 @@ if __name__ == '__main__':
         pickle.dump(ssm, ssm_file)
     # save model (if needed)
     if args.save_agent:
-        torch.save(agent.state_dict(), f'agent_{args.agent_model}.pth')
+        torch.save(agent.state_dict(), f'{args.output_dir}/agent_{args.agent_model}.pth')
