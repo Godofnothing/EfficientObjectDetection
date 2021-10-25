@@ -26,6 +26,7 @@ def get_parser():
     parser.add_argument('--flops_weight', type=float, default=1e-11, help='weight of flops in the reward')
     parser.add_argument('--alpha', type=float, default=0.85, help='probaility bounding factor')
     parser.add_argument('--opt', type=str, default='adam', help='optimizer type [Adam or SGD]')
+    parser.add_argument('-s', '--save_agent', action='store_true')
     
     return parser
 
@@ -88,5 +89,9 @@ if __name__ == '__main__':
     ssm = my_trainer.train(args.num_epochs, batch_size=args.batch_size, validate=True, verbose=30)
 
     os.makedirs(args.output_dir, exist_ok=True)
+    # save training stats
     with open(f"{args.output_dir}/ssm.pkl","wb") as ssm_file:
         pickle.dump(ssm, ssm_file)
+    # save model (if needed)
+    if args.save_agent:
+        torch.save(agent.state_dict(), f'agent_{args.agent_model}.pth')
